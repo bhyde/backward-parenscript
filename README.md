@@ -17,6 +17,23 @@ backward-parenscript> (ps* *)
 backward-parenscript> 
 ```
 
+
+
+```common-lisp
+backward-parenscript> (convert-to-parenscript "if (a<b) {f(a)} else {f(b)};")
+(progn (if (< a b) (f a) (f b)) nil)
+backward-parenscript> (ps* *)
+"if (a < b) {
+    f(a);
+} else {
+    f(b);
+};"
+backward-parenscript> 
+```
+
+This next example illustrates a bug.  The handling of returns from functions needs
+some lov'n.
+
 ```common-lisp
 backward-parenscript> (convert-to-parenscript "function f(x) { return 1 + x;};")
 (progn (defun f (x) (return (+ 1 x))) nil)
@@ -29,14 +46,8 @@ backward-parenscript> (ps* *)
 backward-parenscript> 
 ```
 
+Here's another bug in the handling of vars :(.
 ```common-lisp
-backward-parenscript> (convert-to-parenscript "if (a<b) {f(a)} else {f(b)};")
-(progn (if (< a b) (f a) (f b)) nil)
-backward-parenscript> (ps* *)
-"if (a < b) {
-    f(a);
-} else {
-    f(b);
-};"
-backward-parenscript> 
+(convert-to-parenscript "function f(x) { var z = 1+x; g(z);}")
+(defun f (x) (let ((z (+ 1 x))) :helpme) (g z))
 ```
