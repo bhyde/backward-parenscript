@@ -50,7 +50,7 @@
        (unary (form)
          (ematch form
            (`(,_ ,op ,arg)
-             `(,(op op) ,arg))))
+             `(,(op op) ,(r arg)))))
        (r! (forms) (mapcar #'r forms))
        (r!-progn (forms)
          (let ((f (r! forms)))
