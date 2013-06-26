@@ -7,3 +7,35 @@ resulting s-expression using
 parenscript.
 
 It is quite incomplete, but I think the code is pretty.
+
+```common-lisp
+backward-parenscript> (convert-to-parenscript "a[1].b.c.d(1).e(1).f")
+(chain (aref a 1) b c (d 1) (e 1) f)
+backward-parenscript> (ps* *)
+"a[1].b.c.d(1).e(1).f;"
+backward-parenscript> 
+```
+
+```common-lisp
+backward-parenscript> (convert-to-parenscript "function f(x) { return 1 + x;};")
+(progn (defun f (x) (return (+ 1 x))) nil)
+backward-parenscript> (ps* *)
+; Warning: Returning from unknown block nilblock
+; While executing: parenscript::return-exp, in process repl-thread(13).
+"function f(x) {
+    return 1 + x;
+};"
+backward-parenscript> 
+```
+
+```common-lisp
+backward-parenscript> (convert-to-parenscript "if (a<b) {f(a)} else {f(b)};")
+(progn (if (< a b) (f a) (f b)) nil)
+backward-parenscript> (ps* *)
+"if (a < b) {
+    f(a);
+} else {
+    f(b);
+};"
+backward-parenscript> 
+```
