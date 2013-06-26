@@ -53,8 +53,9 @@
              `(,(op op) ,(r arg)))))
        (r! (forms) (mapcar #'r forms))
        (r!-progn (forms)
-         (let ((f (r! forms)))
-           (if (cdr f) `(progn ,@f) (car f))))
+         (help-let-forms
+          (let ((f (r! forms)))
+            (if (cdr f) `(progn ,@f) (car f)))))
        (r (x)
          (ematch x
            (`(:name ,txt)           (js-name-to-symbol txt))
@@ -82,10 +83,10 @@
               `(@ ,(r x) ,(js-name-to-symbol slot))))
 
            (`(:function nil ,args ,forms)
-             `(lambda ,(mapcar #'js-name-to-symbol args) ,@(r! forms)))
+             `(lambda ,(mapcar #'js-name-to-symbol args) ,@(r!-progn forms)))
            (`(:defun ,name ,args ,forms)
              `(defun ,(js-name-to-symbol name) ,(mapcar #'js-name-to-symbol args)
-                ,@(r! forms)))
+                ,@(r!-progn forms)))
 
            (`(:object ,field-alist)
              `(create ,@(loop
@@ -140,5 +141,21 @@
            ;; otherwise untouched.
            (_ x))))
     (setf *last-conversion* (r parse))))
+
+(defun help-let-forms (form)
+  (match form
+    (`(progn ,@forms)
+      (labels ((r (forms)
+                 (ematch forms
+                   (`((let ,binds :helpme) ,@more-forms)
+                     `((let ,binds ,@(r more-forms))))
+                   (`(,form ,@more-forms)
+                    `(,form ,@(r more-forms)))
+                   (nil nil))))
+        (let ((rewrite (r forms)))
+          (if (cdr rewrite)
+              `(progn ,@rewrite)
+              (car rewrite)))))
+    (_ form)))
 
 
