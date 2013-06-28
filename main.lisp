@@ -25,19 +25,23 @@
 
 (defvar *last-conversion* nil)
 
+(defvar *context-is-top-level* t)
+
 (defun convert-js-parse-tree-to-javascript (parse)
   (labels
       ((TBD (&rest args)
          (declare (ignore args))
          (error "no rest of the wiki'd"))
+       (cant (x)
+         (error "Parenscript has no construct for ~a." x))
        (op (op)
          (ecase op
            (:+ '+)
            (:- '-)
            (:* '*)
            (:< '<)
-           ;;(:-- '--)
-           ;;(:++ '++)
+           (:-- '--)
+           (:++ '++)
            ;;(:! '!)
            ;;(:~ '~)
            (:typeof 'typeof)
@@ -51,11 +55,17 @@
          (ematch form
            (`(,_ ,op ,arg)
              `(,(op op) ,(r arg)))))
+       (wrap-forms-in-progn (forms)
+         (help-let-forms
+          (help-progn
+           `(progn ,@forms))))
+       (form-to-forms (form)
+         (match form
+           (`(progn ,@forms)   forms)
+           (x                  (list x))))
        (r! (forms) (mapcar #'r forms))
        (r!-progn (forms)
-         (help-let-forms
-          (let ((f (r! forms)))
-            (if (cdr f) `(progn ,@f) (car f)))))
+         (wrap-forms-in-progn (r! forms)))
        (r (x)
          (ematch x
            (`(:name ,txt)           (js-name-to-symbol txt))
@@ -68,57 +78,91 @@
            (`(:binary ,_ ,_ ,_)     (binary x))
            (`(:assign :- ,_ ,_)     (binary x 'decf))
 
+           (`(:assign t ,_ ,_)      (binary x 'setf))
            (`(:assign :+ ,_ ,_)     (binary x 'incf))
            (`(:assign := ,_ ,_)     (binary x 'setf))
            (`(:unary-prefix ,_ ,_)  (unary x))
-           (`(:array ,elements)     `(list ,@(r! elements)))
 
-           (`(:toplevel ,forms)     (r!-progn forms))
+           (`(:array ,elements)     `(list ,@(r! elements)))
+           (`(:toplevel ,forms)     (let ((*context-is-top-level* t))
+                                      (r!-progn forms)))
            (`(:seq ,forms)          (r!-progn forms))
            (`(:block ,forms)        (r!-progn forms))
+
            (`(:sub ,array ,index)   `(aref ,(r array) ,(r index)))
+           (`(:regexp ,expr "")     `(regex ,expr))
+           (`(:regexp ,expr ,flags) `(regex ,(format nil "/~A/~A" expr flags)))
+           ('(:debugger)            'debugger)
+
+           (`(:new ,func ,args)     `(new ,(tidy `(,(r func) ,@(r! args)))))
+           (`(:atom :true)          `t)
+           (`(:atom ,atom) (TBD atom))
 
            (`(:dot ,x ,(guard slot (stringp slot)))
              (tidy
               `(@ ,(r x) ,(js-name-to-symbol slot))))
 
            (`(:function nil ,args ,forms)
-             `(lambda ,(mapcar #'js-name-to-symbol args) ,@(r!-progn forms)))
+             `(lambda ,(mapcar #'js-name-to-symbol args) 
+                ,@(form-to-forms
+                   (let ((*context-is-top-level* nil))
+                     (r!-progn forms)))))
            (`(:defun ,name ,args ,forms)
              `(defun ,(js-name-to-symbol name) ,(mapcar #'js-name-to-symbol args)
-                ,@(r!-progn forms)))
+                ,@(form-to-forms
+                   (let ((*context-is-top-level* nil))
+                     (r!-progn forms)))))
 
            (`(:object ,field-alist)
              `(create ,@(loop
                            for (key . value) in field-alist
                            nconc `(,(js-name-to-symbol key) ,(r value)))))
            (`(:var ,bindings)
-             `(let ,(loop 
-                       for (var . init) in bindings
-                       collect `(,(js-name-to-symbol var) ,(r init)))
-                :helpme))
+             (let ((bindings (loop 
+                                for (var . init) in bindings
+                                collect 
+                                  `(,(js-name-to-symbol var) ,(r init)))))
+               (if *context-is-top-level*
+                   (wrap-forms-in-progn
+                    (loop for (var binding) in bindings
+                       collect `(var ,var ,binding)))
+                   `(let ,bindings :helpme))))
 
-           (`(:if ,q ,a ,b)         `(if ,(r q) ,(r a) ,(r b)))
-           (`(:if ,q ,a)            `(if ,(r q) ,(r a)))
+           (`(:throw ,expr)                   `(throw ,(r expr)))
+           (`(:try ,body ,catch nil)          `(try ,(r body)
+                                                    (:catch ,(r catch))))
+           (`(:try ,body ,catch ,finally)     `(try ,(r body) 
+                                                    (:catch ,(r catch))
+                                                    (:finally ,(r finally))))
+
+
+           (`(:if ,q ,a ,b)                   `(if ,(r q) ,(r a) ,(r b)))
+           (`(:if ,q ,a)                      `(if ,(r q) ,(r a)))
+           (`(:conditional ,test ,then ,else) `(if ,test ,then ,else))
+           (`(:while ,cond (:block ,forms))   `(while ,(r cond)
+                                                 ,(r!-progn forms)))
+
+           (`(:for-in (:var ((,name))) (:name ,_) ,obj ,body)
+             `(for-in (,(js-name-to-symbol name) ,(r obj))
+                      ,@(form-to-forms (r body))))
+
+           (`(:label ,_ ,_)                   (cant "label")) 
+           (`(:continue nil)                  '(continue))
+           (`(:continue ,label)               `(continue ,(js-name-to-symbol label)))
+           (`(:break nil)                     '(break))
+           (`(:break ,label)                  `(break ,(js-name-to-symbol label)))
+           (`(:do ,_ ,_)                      (cant "do"))
 
            ;; That's all so far, pending:
-           (`(:atom ,atom) (TBD atom))
-           (`(:regexp ,expr ,flags) (TBD expr flags))
            (`(:unary-postfix ,op ,place) (TBD op place))
-           (`(:conditional ,test ,then ,else) (TBD test then else))
-           (`(:new ,func ,args) (TBD func args))
-           (`(:label ,name ,form) (TBD name form))
-           (`(:with ,obj ,body) (TBD obj body))
-           (`(:return ,value) (TBD value))
-           ('(:debugger) (TBD))
-           (`(:try ,body ,catch ,finally)  (TBD body catch finally))
-           (`(:throw ,expr) (TBD expr))
-           (`(:break ,label) (TBD label))
-           (`(:continue ,label) (TBD label))
-           (`(:while ,cond ,body) (TBD cond body))
-           (`(:do ,cond ,body) (TBD cond body))
-           (`(:for ,init ,cond ,step ,body) (TBD init cond step body))
-           (`(:for-in ,init ,lhs ,obj ,body) (TBD init lhs obj body))
+           (`(:with ,obj ,body)             (TBD obj body))
+
+
+           (`(:for (:var ,bindings) ,cond ,step ,body)
+             (let ((ps-bindings (loop for (name . init) in bindings
+                                   collect `(,(js-name-to-symbol name) ,(r init)))))
+               `(for ,ps-bindings (,(r cond)) (,(r step))
+                     ,@(form-to-forms (r body)))))
            (`(:switch ,val ,@cases) (TBD val cases))))
        (tidy (x)
          "clean up various @/chain forms"
@@ -130,17 +174,17 @@
            ;; revise calls on chain
            (`((chain ,@a) ,@args)
              `(chain ,@(loop 
-                         for (i . remainder) on a
-                           collect (if remainder
-                                       i
-                                       `(,i ,@args)))))
+                          for (i . remainder) on a
+                          collect (if remainder
+                                      i
+                                      `(,i ,@args)))))
            ;; Introduce chain if working on a complex object.
            (`(@ ,(guard call (listp call)) ,@b)
              (tidy
               `(chain ,call ,@b)))
            ;; otherwise untouched.
            (_ x))))
-    (setf *last-conversion* (r parse))))
+    (setf *last-conversion* (r parse)))))
 
 (defun help-let-forms (form)
   (match form
@@ -157,5 +201,20 @@
               `(progn ,@rewrite)
               (car rewrite)))))
     (_ form)))
+
+(defun help-progn (form)
+  "Eliminate unnecessary progn"
+  ;; (progn 1 (progn 2 (f (progn 3)) 4) 5 (progn (progn 6) 7))
+  ;; -> (progn 1 2 (f (progn 3)) 4 5 6 7)
+  (match form
+      (`(progn ,x) (help-progn x))
+      (`(progn ,@forms)           
+        (labels ((r (forms)
+                   (match forms
+                     (`((progn ,@a) ,@b)  `(,@(r a) ,@(r b)))
+                     (`(,a ,@b)           `(,a ,@(r b)))
+                     (nil                 nil))))
+          `(progn ,@(r forms))))
+      (x x)))
 
 
